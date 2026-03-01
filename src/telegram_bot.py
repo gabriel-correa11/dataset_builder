@@ -1,4 +1,6 @@
 import os
+import time
+from collections import defaultdict, deque
 
 import httpx
 from telegram import Update
@@ -8,7 +10,16 @@ API_URL = os.getenv("API_URL", "http://api:8000")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "dev-secret")
 
+AUTHORIZED_USERS: set[int] = set(
+    int(uid.strip())
+    for uid in os.getenv("TELEGRAM_AUTHORIZED_USERS", "").split(",")
+    if uid.strip().isdigit()
+)
+
+_RATE_LIMIT = int(os.getenv("RATE_LIMIT_TELEGRAM_USER", "10"))
+
 _last_text: dict[int, str] = {}
+_user_timestamps: dict[int, deque] = defaultdict(deque)
 
 _SIGNAL_LABELS_PT = {
     "Suspicious link or brand spoofing": "Link suspeito ou imitação de marca conhecida",
@@ -19,6 +30,23 @@ _SIGNAL_LABELS_PT = {
 }
 
 _RISK_PT = {"LOW": "BAIXO", "MEDIUM": "MÉDIO", "HIGH": "ALTO"}
+
+
+def _is_authorized(user_id: int) -> bool:
+    if not AUTHORIZED_USERS:
+        return True
+    return user_id in AUTHORIZED_USERS
+
+
+def _is_rate_limited(user_id: int) -> bool:
+    now = time.monotonic()
+    dq = _user_timestamps[user_id]
+    while dq and now - dq[0] > 60:
+        dq.popleft()
+    if len(dq) >= _RATE_LIMIT:
+        return True
+    dq.append(now)
+    return False
 
 
 def _build_pt(result: dict) -> str:
@@ -84,6 +112,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+
+    if not _is_authorized(user_id):
+        await update.message.reply_text(
+            "Acesso não autorizado. / Unauthorized."
+        )
+        return
+
     text = _last_text.get(user_id)
 
     if not text:
@@ -111,8 +146,21 @@ async def cmd_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = " ".join(update.message.text.split())
     user_id = update.effective_user.id
+
+    if not _is_authorized(user_id):
+        await update.message.reply_text(
+            "Acesso não autorizado. / Unauthorized."
+        )
+        return
+
+    if _is_rate_limited(user_id):
+        await update.message.reply_text(
+            "Limite atingido. Tente novamente em 1 minuto. / Rate limit exceeded. Try again in 1 minute."
+        )
+        return
+
+    text = " ".join(update.message.text.split())
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(

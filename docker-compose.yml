@@ -21,6 +21,8 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - API_URL=http://api:8000
       - ADMIN_API_KEY=${ADMIN_API_KEY:-dev-secret}
+      - TELEGRAM_AUTHORIZED_USERS=${TELEGRAM_AUTHORIZED_USERS}
+      - RATE_LIMIT_TELEGRAM_USER=${RATE_LIMIT_TELEGRAM_USER:-10}
     depends_on:
       - api
     restart: unless-stopped
